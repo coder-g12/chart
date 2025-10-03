@@ -158,8 +158,10 @@ const TradeChart: React.FC = () => {
     const validData = data.filter(
       (d) => d.time && typeof d.time === "string" && d.time.includes(" ")
     );
-     const timeToTopBottom = new Map<Time, string>();
-        validData.forEach(d => timeToTopBottom.set(getTime(d), d.topbottom ?? ""));
+    const timeToTopBottom = new Map<Time, string>();
+    validData.forEach((d) =>
+      timeToTopBottom.set(getTime(d), d.topbottom ?? "")
+    );
 
     const imSeries = chart.addHistogramSeries({
       color: DEFAULT_HIST_COLOR,
@@ -386,7 +388,11 @@ const TradeChart: React.FC = () => {
             ? {
                 time: h.time,
                 value: maxIM - (h.value as number),
-                color: computeColorForType(timeToTopBottom?.get(h.time), true, "IM")
+                color: computeColorForType(
+                  timeToTopBottom?.get(h.time),
+                  true,
+                  "IM"
+                ),
               }
             : h
         );
@@ -400,7 +406,11 @@ const TradeChart: React.FC = () => {
             ? {
                 time: h.time,
                 value: maxMM - (h.value as number),
-                color: computeColorForType(timeToTopBottom?.get(h.time), true, "MM")
+                color: computeColorForType(
+                  timeToTopBottom?.get(h.time),
+                  true,
+                  "MM"
+                ),
               }
             : h
         );
@@ -675,7 +685,7 @@ const TradeChart: React.FC = () => {
           onClick={() => {
             const newAlign = !alignOn;
             setAlignOn(newAlign);
-            if (!newAlign && mirrorOn) setMirrorOn(false);
+            if (!newAlign && mirrorOn) setMirrorOn(false); 
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
