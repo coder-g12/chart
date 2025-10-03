@@ -198,8 +198,9 @@ const TradeChart: React.FC = () => {
       }
     });
     
-    // Sort timestamps for binary search
-    tbTimestamps.sort((a, b) => a - b);
+  
+         tbTimestamps.sort((a: Time, b: Time): number => (a as number) - (b as number));
+
 
     const imSeries = chart.addHistogramSeries({
       color: DEFAULT_HIST_COLOR,
