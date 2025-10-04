@@ -34,9 +34,11 @@ const TradeChart: React.FC = () => {
   });
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [alignOn, setAlignOn] = useState(false);
-  const [showTB, setShowTB] = useState(false);
+  const [showTB, setShowTB] = useState(true);
   const [mirrorOn, setMirrorOn] = useState(false);
-  const [mocOn, setMocOn] = useState(false); // Added MOC state
+  const [mocOn, setMocOn] = useState(false);
+  const [normalizeOn, setNormalizeOn] = useState(false); // Single normalization state for both IM and MM
+  const [holdersOn, setHoldersOn] = useState(false); // New state for Holders mode
 
   const priceRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<{
@@ -52,6 +54,7 @@ const TradeChart: React.FC = () => {
     timeToTopBottom?: Map<Time, string>;
     updateStrSeries?: () => void;
     updateMirror?: () => void;
+    updateNormalization?: () => void; // New function for normalization
     mirrorActive?: boolean;
     imPriceLine?: any;
     mmPriceLine?: any;
@@ -60,6 +63,8 @@ const TradeChart: React.FC = () => {
     valuesByLineAndTime?: Map<string, Map<Time, number>>;
     updateMoc?: () => void;
     mocActive?: boolean;
+    // Normalization states
+    normalizeActive?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -113,6 +118,97 @@ const TradeChart: React.FC = () => {
         return seriesType === "IM" ? IM_GREEN : MM_GREEN;
     }
     return baseColor;
+  };
+
+  // Helper function to normalize histogram data based on visible range
+  const normalizeHistogramData = (
+    originalData: HistogramData[],
+    visibleRange: { from: Time; to: Time },
+    shouldNormalize: boolean,
+    mirrorActive: boolean = false,
+    maxValue?: number,
+    timeToTopBottom?: Map<Time, string>,
+    seriesType: "IM" | "MM" = "IM"
+  ): HistogramData[] => {
+    if (!shouldNormalize || !originalData.length) {
+      // Apply mirror transformation if needed without normalization
+      if (mirrorActive && maxValue !== undefined) {
+        return originalData.map((h) => ({
+          ...h,
+          value: (h.time as Time) >= visibleRange.from && (h.time as Time) <= visibleRange.to 
+            ? maxValue - (h.value as number)
+            : h.value,
+          color: computeColorForType(
+            timeToTopBottom?.get(h.time as Time),
+            mirrorActive,
+            seriesType
+          ),
+        }));
+      }
+      return originalData;
+    }
+
+    // Find visible bars and compute min in single pass
+    const visibleBars: HistogramData[] = [];
+    let minVal = Infinity;
+
+    for (const bar of originalData) {
+      const time = bar.time as Time;
+      if (time >= visibleRange.from && time <= visibleRange.to) {
+        visibleBars.push(bar);
+        const value = mirrorActive && maxValue !== undefined 
+          ? maxValue - (bar.value as number)
+          : (bar.value as number);
+        minVal = Math.min(minVal, value);
+      }
+    }
+
+    // If no visible bars or minVal is 0, return original (or mirrored) data
+    if (visibleBars.length === 0 || minVal <= 0) {
+      if (mirrorActive && maxValue !== undefined) {
+        return originalData.map((h) => ({
+          ...h,
+          value: (h.time as Time) >= visibleRange.from && (h.time as Time) <= visibleRange.to 
+            ? maxValue - (h.value as number)
+            : h.value,
+          color: computeColorForType(
+            timeToTopBottom?.get(h.time as Time),
+            mirrorActive,
+            seriesType
+          ),
+        }));
+      }
+      return originalData;
+    }
+
+    const adjustment = minVal * 0.7; // 70% of minimum value
+
+    // Generate normalized data
+    return originalData.map((bar) => {
+      const time = bar.time as Time;
+      const isVisible = time >= visibleRange.from && time <= visibleRange.to;
+      
+      let adjustedValue = bar.value as number;
+      
+      if (isVisible) {
+        if (mirrorActive && maxValue !== undefined) {
+          adjustedValue = maxValue - adjustedValue;
+        }
+        adjustedValue = Math.max(0, adjustedValue - adjustment);
+      } else if (mirrorActive && maxValue !== undefined) {
+        adjustedValue = maxValue - adjustedValue;
+      }
+
+      return {
+        ...bar,
+        value: adjustedValue,
+        color: computeColorForType(
+          timeToTopBottom?.get(time),
+          mirrorActive,
+          seriesType
+        ),
+      };
+    });
   };
 
   useEffect(() => {
@@ -405,6 +501,7 @@ const TradeChart: React.FC = () => {
         series.setData(mirrored);
       });
 
+      // Handle IM/MM mirroring with normalization
       let maxIM = -Infinity,
         maxMM = -Infinity;
       for (let i = 0; i < validData.length; i++) {
@@ -418,42 +515,84 @@ const TradeChart: React.FC = () => {
       maxMM = maxMM === -Infinity ? 0 : maxMM;
 
       if (originalHistIM && imS) {
-        const newIM = originalHistIM.map((h) =>
-          inViewport(h.time as Time)
-            ? {
-                time: h.time,
-                value: maxIM - (h.value as number),
-                color: computeColorForType(
-                  timeToTopBottom?.get(h.time),
-                  true,
-                  "IM"
-                ),
-              }
-            : h
+        const normalizedIM = normalizeHistogramData(
+          originalHistIM,
+          visibleRange,
+          inst.normalizeActive || false,
+          true,
+          maxIM,
+          timeToTopBottom,
+          "IM"
         );
-        imS.setData(newIM);
-        const lastNewIM = newIM[newIM.length - 1];
-        inst.imPriceLine?.applyOptions({ price: lastNewIM.value });
+        imS.setData(normalizedIM);
+        const lastNormIM = normalizedIM[normalizedIM.length - 1];
+        inst.imPriceLine?.applyOptions({ price: lastNormIM.value });
       }
       if (originalHistMM && mmS) {
-        const newMM = originalHistMM.map((h) =>
-          inViewport(h.time as Time)
-            ? {
-                time: h.time,
-                value: maxMM - (h.value as number),
-                color: computeColorForType(
-                  timeToTopBottom?.get(h.time),
-                  true,
-                  "MM"
-                ),
-              }
-            : h
+        const normalizedMM = normalizeHistogramData(
+          originalHistMM,
+          visibleRange,
+          inst.normalizeActive || false,
+          true,
+          maxMM,
+          timeToTopBottom,
+          "MM"
         );
-        mmS.setData(newMM);
-        const lastNewMM = newMM[newMM.length - 1];
-        inst.mmPriceLine?.applyOptions({ price: lastNewMM.value });
+        mmS.setData(normalizedMM);
+        const lastNormMM = normalizedMM[normalizedMM.length - 1];
+        inst.mmPriceLine?.applyOptions({ price: lastNormMM.value });
       }
       inst.updateStrSeries?.();
+    };
+
+    // New normalization update function
+    const updateNormalization = () => {
+      const inst = chartInstanceRef.current;
+      if (!inst) return;
+      
+      const { chart, imSeries: imS, mmSeries: mmS, originalHistIM, originalHistMM, timeToTopBottom } = inst;
+      const visibleRange = chart.timeScale().getVisibleRange();
+      if (!visibleRange) return;
+
+      // Handle IM normalization
+      if (originalHistIM && imS) {
+        const normalizedIM = normalizeHistogramData(
+          originalHistIM,
+          visibleRange,
+          inst.normalizeActive || false,
+          inst.mirrorActive || false,
+          // Calculate maxIM for mirror if needed
+          inst.mirrorActive ? Math.max(...validData.filter(d => {
+            const t = getTime(d);
+            return t >= visibleRange.from && t <= visibleRange.to;
+          }).map(d => d.im)) : undefined,
+          timeToTopBottom,
+          "IM"
+        );
+        imS.setData(normalizedIM);
+        const lastNormIM = normalizedIM[normalizedIM.length - 1];
+        inst.imPriceLine?.applyOptions({ price: lastNormIM.value });
+      }
+
+      // Handle MM normalization
+      if (originalHistMM && mmS) {
+        const normalizedMM = normalizeHistogramData(
+          originalHistMM,
+          visibleRange,
+          inst.normalizeActive || false,
+          inst.mirrorActive || false,
+          // Calculate maxMM for mirror if needed
+          inst.mirrorActive ? Math.max(...validData.filter(d => {
+            const t = getTime(d);
+            return t >= visibleRange.from && t <= visibleRange.to;
+          }).map(d => d.mm)) : undefined,
+          timeToTopBottom,
+          "MM"
+        );
+        mmS.setData(normalizedMM);
+        const lastNormMM = normalizedMM[normalizedMM.length - 1];
+        inst.mmPriceLine?.applyOptions({ price: lastNormMM.value });
+      }
     };
 
     // Create a mapping of value by series key and timestamp for O(1) lookups
@@ -556,6 +695,7 @@ const TradeChart: React.FC = () => {
       timeToTopBottom,
       updateStrSeries,
       updateMirror,
+      updateNormalization, // Add the new normalization function
       mirrorActive: false,
       imPriceLine,
       mmPriceLine,
@@ -564,6 +704,8 @@ const TradeChart: React.FC = () => {
       valuesByLineAndTime,
       updateMoc,
       mocActive: false,
+      // Normalization states
+      normalizeActive: false,
     };
 
     return () => {
@@ -822,9 +964,9 @@ const TradeChart: React.FC = () => {
         } catch {}
       }
 
-      // Apply MOC if it's active after mirror is turned off
-      if (mocOn && inst.updateMoc) {
-        inst.updateMoc();
+      // Apply normalization if active after mirror is turned off
+      if (normalizeOn && inst.updateNormalization) {
+        inst.updateNormalization();
       }
     }
   }, [mirrorOn]);
@@ -859,6 +1001,41 @@ const TradeChart: React.FC = () => {
       });
     }
   }, [mocOn]);
+
+  // Normalization useEffect handler
+  useEffect(() => {
+    const inst = chartInstanceRef.current;
+    if (!inst) return;
+    const { chart, updateNormalization } = inst;
+    
+    inst.normalizeActive = normalizeOn;
+
+    if (normalizeOn && updateNormalization) {
+      chart.timeScale().subscribeVisibleTimeRangeChange(updateNormalization);
+      updateNormalization();
+    } else if (!normalizeOn && updateNormalization) {
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(updateNormalization);
+      updateNormalization(); // This will restore original data
+    }
+  }, [normalizeOn]);
+
+  // Holders monitoring useEffect
+  useEffect(() => {
+    if (holdersOn) {
+      const root3 = showStrs.root[3];
+      const live3 = showStrs.live[3];
+      const othersOn = Object.entries(showStrs).some(([key, arr]) => {
+        if (key === 'root' || key === 'live') {
+          return arr.some((val, idx) => val && idx !== 3);
+        } else {
+          return arr.some(val => val);
+        }
+      });
+      if (!root3 || !live3 || othersOn) {
+        setHoldersOn(false);
+      }
+    }
+  }, [showStrs, holdersOn]);
 
   return (
     <div className="w-full h-[600px]">
@@ -903,6 +1080,13 @@ const TradeChart: React.FC = () => {
         >
           MM: {showMM ? "On" : "Off"}
         </button>
+        {/* Single Normalization button */}
+        <button
+          onClick={() => setNormalizeOn(!normalizeOn)}
+          className="px-4 py-2 bg-gray-700 text-white rounded"
+        >
+          Norm: {normalizeOn ? "On" : "Off"}
+        </button>
         <button
           onClick={() => {
             setMirrorOn(!mirrorOn);
@@ -931,6 +1115,28 @@ const TradeChart: React.FC = () => {
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
           MOC: {mocOn ? "On" : "Off"}
+        </button>
+        {/* Holders toggle button */}
+        <button
+          onClick={() => {
+            if (!holdersOn) {
+              // Turn on holders: set only root[3] and live[3] to true, others false
+              setShowStrs({
+                drive: [false, false, false, false, false],
+                harmony: [false, false, false, false, false],
+                root: [false, false, false, true, false],
+                action: [false, false, false, false, false],
+                expand: [false, false, false, false, false],
+                live: [false, false, false, true, false],
+              });
+              setHoldersOn(true);
+            } else {
+              setHoldersOn(false);
+            }
+          }}
+          className="px-4 py-2 bg-gray-700 text-white rounded"
+        >
+          Holders: {holdersOn ? "On" : "Off"}
         </button>
         {Object.keys(showStrs).map((key) => (
           <div key={key} className="relative">
