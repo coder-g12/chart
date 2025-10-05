@@ -39,6 +39,7 @@ const TradeChart: React.FC = () => {
   const [mocOn, setMocOn] = useState(false);
   const [normalizeOn, setNormalizeOn] = useState(false); // Single normalization state for both IM and MM
   const [holdersOn, setHoldersOn] = useState(false); // New state for Holders mode
+  const [rbmOn, setRbmOn] = useState(false); // New state for RBM mode
 
   const priceRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<{
@@ -65,6 +66,9 @@ const TradeChart: React.FC = () => {
     mocActive?: boolean;
     // Normalization states
     normalizeActive?: boolean;
+    // RBM fields
+    rbmSeries?: ISeriesApi<"Line">;
+    originalRbmData?: LineData[];
   } | null>(null);
 
   useEffect(() => {
@@ -135,9 +139,11 @@ const TradeChart: React.FC = () => {
       if (mirrorActive && maxValue !== undefined) {
         return originalData.map((h) => ({
           ...h,
-          value: (h.time as Time) >= visibleRange.from && (h.time as Time) <= visibleRange.to 
-            ? maxValue - (h.value as number)
-            : h.value,
+          value:
+            (h.time as Time) >= visibleRange.from &&
+            (h.time as Time) <= visibleRange.to
+              ? maxValue - (h.value as number)
+              : h.value,
           color: computeColorForType(
             timeToTopBottom?.get(h.time as Time),
             mirrorActive,
@@ -156,9 +162,10 @@ const TradeChart: React.FC = () => {
       const time = bar.time as Time;
       if (time >= visibleRange.from && time <= visibleRange.to) {
         visibleBars.push(bar);
-        const value = mirrorActive && maxValue !== undefined 
-          ? maxValue - (bar.value as number)
-          : (bar.value as number);
+        const value =
+          mirrorActive && maxValue !== undefined
+            ? maxValue - (bar.value as number)
+            : (bar.value as number);
         minVal = Math.min(minVal, value);
       }
     }
@@ -168,9 +175,11 @@ const TradeChart: React.FC = () => {
       if (mirrorActive && maxValue !== undefined) {
         return originalData.map((h) => ({
           ...h,
-          value: (h.time as Time) >= visibleRange.from && (h.time as Time) <= visibleRange.to 
-            ? maxValue - (h.value as number)
-            : h.value,
+          value:
+            (h.time as Time) >= visibleRange.from &&
+            (h.time as Time) <= visibleRange.to
+              ? maxValue - (h.value as number)
+              : h.value,
           color: computeColorForType(
             timeToTopBottom?.get(h.time as Time),
             mirrorActive,
@@ -187,9 +196,9 @@ const TradeChart: React.FC = () => {
     return originalData.map((bar) => {
       const time = bar.time as Time;
       const isVisible = time >= visibleRange.from && time <= visibleRange.to;
-      
+
       let adjustedValue = bar.value as number;
-      
+
       if (isVisible) {
         if (mirrorActive && maxValue !== undefined) {
           adjustedValue = maxValue - adjustedValue;
@@ -406,6 +415,19 @@ const TradeChart: React.FC = () => {
         }));
         series.setData(transformed);
       });
+
+      // Handle RBM alignment
+      if (inst.rbmSeries && inst.originalRbmData) {
+        const rbmValAtAnchor = validData[anchorIndex].rbm;
+        const offset =
+          (mirrorActive ? -rbmValAtAnchor : rbmValAtAnchor) -
+          displayedAnchorPrice;
+        const transformedRbm = inst.originalRbmData.map((pt) => ({
+          time: pt.time,
+          value: (mirrorActive ? -pt.value : pt.value) - offset,
+        }));
+        inst.rbmSeries.setData(transformedRbm);
+      }
     };
 
     const updateMirror = () => {
@@ -549,8 +571,15 @@ const TradeChart: React.FC = () => {
     const updateNormalization = () => {
       const inst = chartInstanceRef.current;
       if (!inst) return;
-      
-      const { chart, imSeries: imS, mmSeries: mmS, originalHistIM, originalHistMM, timeToTopBottom } = inst;
+
+      const {
+        chart,
+        imSeries: imS,
+        mmSeries: mmS,
+        originalHistIM,
+        originalHistMM,
+        timeToTopBottom,
+      } = inst;
       const visibleRange = chart.timeScale().getVisibleRange();
       if (!visibleRange) return;
 
@@ -562,10 +591,16 @@ const TradeChart: React.FC = () => {
           inst.normalizeActive || false,
           inst.mirrorActive || false,
           // Calculate maxIM for mirror if needed
-          inst.mirrorActive ? Math.max(...validData.filter(d => {
-            const t = getTime(d);
-            return t >= visibleRange.from && t <= visibleRange.to;
-          }).map(d => d.im)) : undefined,
+          inst.mirrorActive
+            ? Math.max(
+                ...validData
+                  .filter((d) => {
+                    const t = getTime(d);
+                    return t >= visibleRange.from && t <= visibleRange.to;
+                  })
+                  .map((d) => d.im)
+              )
+            : undefined,
           timeToTopBottom,
           "IM"
         );
@@ -582,10 +617,16 @@ const TradeChart: React.FC = () => {
           inst.normalizeActive || false,
           inst.mirrorActive || false,
           // Calculate maxMM for mirror if needed
-          inst.mirrorActive ? Math.max(...validData.filter(d => {
-            const t = getTime(d);
-            return t >= visibleRange.from && t <= visibleRange.to;
-          }).map(d => d.mm)) : undefined,
+          inst.mirrorActive
+            ? Math.max(
+                ...validData
+                  .filter((d) => {
+                    const t = getTime(d);
+                    return t >= visibleRange.from && t <= visibleRange.to;
+                  })
+                  .map((d) => d.mm)
+              )
+            : undefined,
           timeToTopBottom,
           "MM"
         );
@@ -706,6 +747,9 @@ const TradeChart: React.FC = () => {
       mocActive: false,
       // Normalization states
       normalizeActive: false,
+      // RBM fields
+      rbmSeries: undefined,
+      originalRbmData: undefined,
     };
 
     return () => {
@@ -730,6 +774,10 @@ const TradeChart: React.FC = () => {
           if (original) series.setData(original);
         }
       });
+      // Restore RBM original data if not MOC active
+      if (!inst.mocActive && inst.rbmSeries && inst.originalRbmData) {
+        inst.rbmSeries.setData(inst.originalRbmData);
+      }
     }
   }, [alignOn]);
 
@@ -819,12 +867,11 @@ const TradeChart: React.FC = () => {
       "live",
     ];
     const colors = [
-      "#ff0000",
-      "#00ff00",
-      "#0000ff",
-      "#ffff00",
-      "#ff00ff",
-      "#00ffff",
+      "#ffffff", // str1: white
+      "#0000ff", // str2: blue
+      "#ff0000", // str3: red
+      "#00ff00", // str4: green
+      "#ffff00", // str5: yellow
     ];
 
     strTypes.forEach((strType, typeIndex) => {
@@ -862,15 +909,49 @@ const TradeChart: React.FC = () => {
       });
     });
 
-    if (mirrorOn && chartInstanceRef.current.updateMirror)
+    // Add this check and trigger alignment if needed
+    if (alignOn && chartInstanceRef.current.updateStrSeries) {
+      chartInstanceRef.current.updateStrSeries();
+    } else if (mirrorOn && chartInstanceRef.current.updateMirror) {
       chartInstanceRef.current.updateMirror();
-    else if (
+    } else if (
       chartInstanceRef.current.mocActive &&
       chartInstanceRef.current.updateMoc
-    )
+    ) {
       chartInstanceRef.current.updateMoc();
-  }, [showStrs, data, mirrorOn]);
+    }
+  }, [showStrs, data, mirrorOn, alignOn]);
+  // RBM useEffect handler
+  useEffect(() => {
+    if (!chartInstanceRef.current || !data.length) return;
+    const { chart } = chartInstanceRef.current;
+    const validData = data.filter(
+      (d) => d.time && typeof d.time === "string" && d.time.includes(" ")
+    );
+    if (rbmOn) {
+      if (!chartInstanceRef.current.rbmSeries) {
+        const rbmSeries = chart.addLineSeries({ color: "#ff00ff" });
+        const rbmData: LineData[] = validData.map((d) => ({
+          time: getTime(d),
+          value: d.rbm,
+        }));
+        rbmSeries.setData(rbmData);
+        chartInstanceRef.current.rbmSeries = rbmSeries;
+        chartInstanceRef.current.originalRbmData = rbmData;
 
+        // If align is on, align immediately
+        if (alignOn && chartInstanceRef.current.updateStrSeries) {
+          chartInstanceRef.current.updateStrSeries();
+        }
+      }
+    } else {
+      if (chartInstanceRef.current.rbmSeries) {
+        chart.removeSeries(chartInstanceRef.current.rbmSeries);
+        chartInstanceRef.current.rbmSeries = undefined;
+        chartInstanceRef.current.originalRbmData = undefined;
+      }
+    }
+  }, [rbmOn, data]);
   useEffect(() => {
     if (!chartInstanceRef.current?.chart) return;
     const { chart, imSeries, mmSeries } = chartInstanceRef.current;
@@ -1007,7 +1088,7 @@ const TradeChart: React.FC = () => {
     const inst = chartInstanceRef.current;
     if (!inst) return;
     const { chart, updateNormalization } = inst;
-    
+
     inst.normalizeActive = normalizeOn;
 
     if (normalizeOn && updateNormalization) {
@@ -1019,23 +1100,7 @@ const TradeChart: React.FC = () => {
     }
   }, [normalizeOn]);
 
-  // Holders monitoring useEffect
-  useEffect(() => {
-    if (holdersOn) {
-      const root3 = showStrs.root[3];
-      const live3 = showStrs.live[3];
-      const othersOn = Object.entries(showStrs).some(([key, arr]) => {
-        if (key === 'root' || key === 'live') {
-          return arr.some((val, idx) => val && idx !== 3);
-        } else {
-          return arr.some(val => val);
-        }
-      });
-      if (!root3 || !live3 || othersOn) {
-        setHoldersOn(false);
-      }
-    }
-  }, [showStrs, holdersOn]);
+
 
   return (
     <div className="w-full h-[600px]">
@@ -1104,13 +1169,23 @@ const TradeChart: React.FC = () => {
         <button
           onClick={() => {
             const newMoc = !mocOn;
-            setMocOn(newMoc);
             if (newMoc) {
-              // Turn off ALIGN when MOC is enabled
+              // Identify active types and ensure str1 is on for them
+              const activeTypes = Object.keys(showStrs).filter((key) =>
+                showStrs[key].some(Boolean)
+              );
+              const newShowStrs = { ...showStrs };
+              activeTypes.forEach((key) => {
+                newShowStrs[key] = [...newShowStrs[key]];
+                newShowStrs[key][0] = true;
+              });
+              setShowStrs(newShowStrs);
+
+              // Turn off ALIGN and MIRROR
               if (alignOn) setAlignOn(false);
-              // Turn off MIRROR if it's on
               if (mirrorOn) setMirrorOn(false);
             }
+            setMocOn(newMoc);
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
@@ -1120,23 +1195,44 @@ const TradeChart: React.FC = () => {
         <button
           onClick={() => {
             if (!holdersOn) {
-              // Turn on holders: set only root[3] and live[3] to true, others false
-              setShowStrs({
-                drive: [false, false, false, false, false],
-                harmony: [false, false, false, false, false],
-                root: [false, false, false, true, false],
-                action: [false, false, false, false, false],
-                expand: [false, false, false, false, false],
-                live: [false, false, false, true, false],
-              });
+              // Turn on Holders: Enable root[3] and live[3] without turning off others
+              setShowStrs((prev) => ({
+                ...prev,
+                root: [...prev.root.slice(0, 3), true, ...prev.root.slice(4)],
+                live: [...prev.live.slice(0, 3), true, ...prev.live.slice(4)],
+              }));
               setHoldersOn(true);
             } else {
+              // Turn off Holders: Disable root[3] and live[3] without affecting others
+              setShowStrs((prev) => ({
+                ...prev,
+                root: [...prev.root.slice(0, 3), false, ...prev.root.slice(4)],
+                live: [...prev.live.slice(0, 3), false, ...prev.live.slice(4)],
+              }));
               setHoldersOn(false);
             }
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
           Holders: {holdersOn ? "On" : "Off"}
+        </button>
+        {/* RBM toggle button */}
+        <button
+          onClick={() => {
+            const newRbmOn = !rbmOn;
+            setRbmOn(newRbmOn);
+            setShowStrs((prev) => ({
+              ...prev,
+              drive: [
+                ...prev.drive.slice(0, 4),
+                newRbmOn,
+                ...prev.drive.slice(5),
+              ],
+            }));
+          }}
+          className="px-4 py-2 bg-gray-700 text-white rounded"
+        >
+          RBM: {rbmOn ? "On" : "Off"}
         </button>
         {Object.keys(showStrs).map((key) => (
           <div key={key} className="relative">
@@ -1182,5 +1278,4 @@ const TradeChart: React.FC = () => {
     </div>
   );
 };
-
 export default TradeChart;

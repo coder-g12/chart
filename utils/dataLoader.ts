@@ -39,6 +39,7 @@ export const loadData = async (): Promise<CandleData[]> => {
       live: [row[34], row[35], row[36], row[37], row[38]].map(v => parseFloat(v as string) || 0),
       mm: parseFloat(row[39] as string) || 0,
       im: parseFloat(row[40] as string) || 0,
+      rbm: parseFloat(row[41] as string) || 0, // New RBM from column AP
     }));
     console.log('Parsed data sample:', data.slice(0, 3));
     return data;

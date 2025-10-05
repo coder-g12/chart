@@ -15,6 +15,7 @@ interface CandleData {
   live: number[];
   mm: number;
   im: number;
+   rbm: number;
 }
 
 export default CandleData;
