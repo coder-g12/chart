@@ -983,6 +983,7 @@ const TradeChart: React.FC = () => {
         if (showStrs[strType][i] && !strSeries.has(key)) {
           const series = chart.addLineSeries({
             color: colors[(typeIndex * 5 + i) % colors.length],
+            lineStyle: strType === "root" && i === 1 ? 2 : 0, // Dashed for root str2
           });
           const lineData: LineData[] = validData.map((d) => ({
             time: getTime(d),
