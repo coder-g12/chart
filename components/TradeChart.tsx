@@ -57,6 +57,7 @@ const TradeChart: React.FC = () => {
     updateStrSeries?: () => void;
     updateMirror?: () => void;
     updateNormalization?: () => void; // New function for normalization
+    updateTBMarkers?: () => void; // New function for TB markers
     mirrorActive?: boolean;
     imPriceLine?: any;
     mmPriceLine?: any;
@@ -85,33 +86,28 @@ const TradeChart: React.FC = () => {
     return Math.floor(date.getTime() / 1000) as Time;
   };
 
-  // Binary search to find the index of the nth most recent timestamp <= target
+  // Updated function to find the nth previous T/B marker for any given time
   const findNthPreviousTbIndex = (
     timestamps: Time[],
     target: Time,
     n: number
   ): number => {
-    let left = 0;
-    let right = timestamps.length - 1;
-    let result = -1;
-    let count = 0;
+    // Find all T/B timestamps that are before the target time
+    const eligibleTimestamps = timestamps.filter((t) => t < target);
 
-    while (left <= right) {
-      const mid = Math.floor((left + right) / 2);
-      if (timestamps[mid] <= target) {
-        result = mid;
-        left = mid + 1;
-      } else {
-        right = mid - 1;
-      }
+    // If we don't have enough previous T/B markers, return -1
+    if (eligibleTimestamps.length < n) {
+      return -1;
     }
 
-    // Now result is the index of the most recent <= target
-    if (result === -1) return -1; // No timestamps <= target
+    // Sort in descending order (most recent first)
+    eligibleTimestamps.sort((a, b) => (b as number) - (a as number));
 
-    // Find the nth previous by going back n-1 steps
-    const nthIndex = result - (n - 1);
-    return nthIndex >= 0 ? nthIndex : -1;
+    // Get the nth previous (n-1 index in 0-based array)
+    const nthPreviousTime = eligibleTimestamps[n - 1];
+
+    // Find the index in the original timestamps array
+    return timestamps.findIndex((t) => t === nthPreviousTime);
   };
 
   const computeColorForType = (
@@ -442,6 +438,50 @@ const TradeChart: React.FC = () => {
       }
     };
 
+    // New function to update TB markers based on mirror state
+    const updateTBMarkers = () => {
+      const inst = chartInstanceRef.current;
+      if (!inst || !inst.priceSeries || !showTB) return;
+
+      const mirrorActive = Boolean(inst.mirrorActive);
+      const markers: any[] = [];
+
+      validData.forEach((d) => {
+        const time = getTime(d);
+        const tb = (d.topbottom ?? "").toString().toUpperCase();
+        let isT = tb === "T";
+        let isB = tb === "B";
+
+        // Switch colors when mirror is active
+        if (mirrorActive) {
+          [isT, isB] = [isB, isT];
+        }
+
+        if (isT) {
+          markers.push({
+            time,
+            position: "inBar",
+            color: GREEN,
+            shape: "circle",
+            size: 1,
+          });
+        }
+        if (isB) {
+          markers.push({
+            time,
+            position: "inBar",
+            color: RED,
+            shape: "circle",
+            size: 1,
+          });
+        }
+      });
+
+      try {
+        (inst.priceSeries as any).setMarkers(markers);
+      } catch {}
+    };
+
     const updateMirror = () => {
       const inst = chartInstanceRef.current;
       if (!inst) return;
@@ -495,35 +535,8 @@ const TradeChart: React.FC = () => {
       });
       priceSeries.setData(transformedPrice as any);
 
-      if (showTB && "setMarkers" in priceSeries) {
-        const markers: any[] = [];
-        validData.forEach((d) => {
-          const time = getTime(d);
-          const tb = (d.topbottom ?? "").toString().toUpperCase();
-          let isT = tb === "T";
-          let isB = tb === "B";
-          if (mirrorOn) [isT, isB] = [isB, isT];
-          if (isT)
-            markers.push({
-              time,
-              position: "inBar",
-              color: GREEN,
-              shape: "circle",
-              size: 1,
-            });
-          if (isB)
-            markers.push({
-              time,
-              position: "inBar",
-              color: RED,
-              shape: "circle",
-              size: 1,
-            });
-        });
-        try {
-          (priceSeries as any).setMarkers(markers);
-        } catch {}
-      }
+      // Update TB markers with mirror logic
+      updateTBMarkers();
 
       strSeries.forEach((series, key) => {
         const orig = originalStrData.get(key);
@@ -668,7 +681,7 @@ const TradeChart: React.FC = () => {
       const visibleRange = chart.timeScale().getVisibleRange();
       if (!visibleRange) return;
 
-      const n = inst.moc2Active ? 3 : 1; // Use 3 for MOC2, 1 for MOC1
+      const n = inst.moc2Active ? 2 : 1; // Use 2 for MOC2, 1 for MOC1
 
       // Group series by type
       const seriesByType: Record<string, string[]> = {};
@@ -746,6 +759,7 @@ const TradeChart: React.FC = () => {
       updateStrSeries,
       updateMirror,
       updateNormalization, // Add the new normalization function
+      updateTBMarkers, // Add the new TB markers function
       mirrorActive: false,
       imPriceLine,
       mmPriceLine,
@@ -877,33 +891,8 @@ const TradeChart: React.FC = () => {
       }));
       newSeries.setData(lineData);
       if (showTB) {
-        const markers: any[] = [];
-        validData.forEach((d) => {
-          const time = getTime(d);
-          const tb = (d.topbottom ?? "").toString().toUpperCase();
-          let isT = tb === "T",
-            isB = tb === "B";
-          if (mirrorOn) [isT, isB] = [isB, isT];
-          if (isT)
-            markers.push({
-              time,
-              position: "inBar",
-              color: GREEN,
-              shape: "circle",
-              size: 1,
-            });
-          if (isB)
-            markers.push({
-              time,
-              position: "inBar",
-              color: RED,
-              shape: "circle",
-              size: 1,
-            });
-        });
-        try {
-          (newSeries as any).setMarkers(markers);
-        } catch {}
+        // Update TB markers based on current mirror state
+        chartInstanceRef.current!.updateTBMarkers?.();
       }
       chartInstanceRef.current!.originalPriceData = lineData;
     }
@@ -983,6 +972,7 @@ const TradeChart: React.FC = () => {
       chartInstanceRef.current.updateMoc();
     }
   }, [showStrs, data, mirrorOn, alignOn]);
+
   // RBM useEffect handler
   useEffect(() => {
     if (!chartInstanceRef.current || !data.length) return;
@@ -1014,6 +1004,7 @@ const TradeChart: React.FC = () => {
       }
     }
   }, [rbmOn, data]);
+
   useEffect(() => {
     if (!chartInstanceRef.current?.chart) return;
     const { chart, imSeries, mmSeries } = chartInstanceRef.current;
@@ -1076,36 +1067,10 @@ const TradeChart: React.FC = () => {
         const lastOrigMM = inst.originalHistMM[inst.originalHistMM.length - 1];
         inst.mmPriceLine?.applyOptions({ price: lastOrigMM.value });
       }
-      if (showTB && inst.priceSeries) {
-        const markers: any[] = [];
-        const validData = data.filter(
-          (d) => d.time && typeof d.time === "string" && d.time.includes(" ")
-        );
-        validData.forEach((d) => {
-          const time = getTime(d);
-          const tb = (d.topbottom ?? "").toString().toUpperCase();
-          const isT = tb === "T",
-            isB = tb === "B";
-          if (isT)
-            markers.push({
-              time,
-              position: "inBar",
-              color: GREEN,
-              shape: "circle",
-              size: 1,
-            });
-          if (isB)
-            markers.push({
-              time,
-              position: "inBar",
-              color: RED,
-              shape: "circle",
-              size: 1,
-            });
-        });
-        try {
-          (inst.priceSeries as any).setMarkers(markers);
-        } catch {}
+
+      // Update TB markers when mirror is turned off
+      if (showTB && inst.updateTBMarkers) {
+        inst.updateTBMarkers();
       }
 
       // Apply normalization if active after mirror is turned off
@@ -1114,6 +1079,14 @@ const TradeChart: React.FC = () => {
       }
     }
   }, [mirrorOn]);
+
+  // Update TB markers when showTB changes
+  useEffect(() => {
+    const inst = chartInstanceRef.current;
+    if (inst && inst.updateTBMarkers && priceType === "line") {
+      inst.updateTBMarkers();
+    }
+  }, [showTB, priceType]);
 
   // MOC useEffect handler
   useEffect(() => {
