@@ -37,6 +37,7 @@ const TradeChart: React.FC = () => {
   const [showTB, setShowTB] = useState(true);
   const [mirrorOn, setMirrorOn] = useState(false);
   const [mocOn, setMocOn] = useState(false);
+  const [moc2On, setMoc2On] = useState(false); // New state for MOC2
   const [normalizeOn, setNormalizeOn] = useState(false); // Single normalization state for both IM and MM
   const [holdersOn, setHoldersOn] = useState(false); // New state for Holders mode
   const [rbmOn, setRbmOn] = useState(false); // New state for RBM mode
@@ -64,6 +65,7 @@ const TradeChart: React.FC = () => {
     valuesByLineAndTime?: Map<string, Map<Time, number>>;
     updateMoc?: () => void;
     mocActive?: boolean;
+    moc2Active?: boolean; // New for MOC2
     // Normalization states
     normalizeActive?: boolean;
     // RBM fields
@@ -83,11 +85,16 @@ const TradeChart: React.FC = () => {
     return Math.floor(date.getTime() / 1000) as Time;
   };
 
-  // Binary search to find the index of the most recent timestamp <= target
-  const findPreviousTbIndex = (timestamps: Time[], target: Time): number => {
+  // Binary search to find the index of the nth most recent timestamp <= target
+  const findNthPreviousTbIndex = (
+    timestamps: Time[],
+    target: Time,
+    n: number
+  ): number => {
     let left = 0;
     let right = timestamps.length - 1;
     let result = -1;
+    let count = 0;
 
     while (left <= right) {
       const mid = Math.floor((left + right) / 2);
@@ -99,7 +106,12 @@ const TradeChart: React.FC = () => {
       }
     }
 
-    return result;
+    // Now result is the index of the most recent <= target
+    if (result === -1) return -1; // No timestamps <= target
+
+    // Find the nth previous by going back n-1 steps
+    const nthIndex = result - (n - 1);
+    return nthIndex >= 0 ? nthIndex : -1;
   };
 
   const computeColorForType = (
@@ -642,7 +654,7 @@ const TradeChart: React.FC = () => {
     // MOC update function
     const updateMoc = () => {
       const inst = chartInstanceRef.current;
-      if (!inst || !inst.mocActive) return;
+      if (!inst || (!inst.mocActive && !inst.moc2Active)) return;
 
       const {
         chart,
@@ -655,6 +667,8 @@ const TradeChart: React.FC = () => {
 
       const visibleRange = chart.timeScale().getVisibleRange();
       if (!visibleRange) return;
+
+      const n = inst.moc2Active ? 3 : 1; // Use 3 for MOC2, 1 for MOC1
 
       // Group series by type
       const seriesByType: Record<string, string[]> = {};
@@ -687,37 +701,32 @@ const TradeChart: React.FC = () => {
             const targetValues = valuesByLineAndTime.get(targetKey);
             if (!targetValues) return;
 
-            // Transform points in visible range
-            const transformed = original
-              .filter(
-                (pt) =>
-                  pt.time >= visibleRange.from && pt.time <= visibleRange.to
-              )
-              .map((pt) => {
-                const time = pt.time as Time;
+            // Transform all points, calculating adjustment per point
+            const transformed = original.map((pt) => {
+              const time = pt.time as Time;
 
-                // Find previous T/B timestamp
-                const prevIndex = findPreviousTbIndex(tbTimestamps, time);
-                if (prevIndex === -1) return pt; // No previous T/B marker, keep original
+              // Find the nth previous T/B timestamp for this point
+              const prevIndex = findNthPreviousTbIndex(tbTimestamps, time, n);
+              if (prevIndex === -1) return pt; // Not enough previous T/B markers
 
-                const prevTbTime = tbTimestamps[prevIndex];
+              const prevTbTime = tbTimestamps[prevIndex];
 
-                // Get values at the previous T/B marker
-                const baseValue = baseValues.get(prevTbTime);
-                const targetValue = targetValues.get(prevTbTime);
+              // Get values at the nth previous T/B marker
+              const baseValue = baseValues.get(prevTbTime);
+              const targetValue = targetValues.get(prevTbTime);
 
-                // If either value is missing, keep original
-                if (baseValue === undefined || targetValue === undefined) {
-                  return pt;
-                }
+              // If either value is missing, keep original
+              if (baseValue === undefined || targetValue === undefined) {
+                return pt;
+              }
 
-                // Apply the transform: adjusted = original - (target_prev - base_prev)
-                const adjustment = targetValue - baseValue;
-                return {
-                  time,
-                  value: pt.value - adjustment,
-                };
-              });
+              // Apply the transform: adjusted = original - (target_prev - base_prev)
+              const adjustment = targetValue - baseValue;
+              return {
+                time,
+                value: pt.value - adjustment,
+              };
+            });
 
             // Set the transformed data
             series.setData(transformed);
@@ -745,12 +754,59 @@ const TradeChart: React.FC = () => {
       valuesByLineAndTime,
       updateMoc,
       mocActive: false,
+      moc2Active: false, // New for MOC2
       // Normalization states
       normalizeActive: false,
       // RBM fields
       rbmSeries: undefined,
       originalRbmData: undefined,
     };
+
+    // Add click handler for MOC2 logging
+    chart.subscribeClick((param) => {
+      const inst = chartInstanceRef.current;
+      if (!inst || !inst.moc2Active || !param.time) return;
+
+      const time = param.time as Time;
+
+      // Find the 2nd previous T/B
+      const n = 2;
+      const prevIndex = findNthPreviousTbIndex(inst.tbTimestamps!, time, n);
+      if (prevIndex === -1) {
+        console.log(`No ${n}th previous T/B for time ${time}`);
+        return;
+      }
+
+      const prevTbTime = inst.tbTimestamps![prevIndex];
+
+      // Log for each str series (non-base)
+      inst.strSeries.forEach((series, key) => {
+        const [strType] = key.split("-");
+        const baseKey = `${strType}-0`;
+        if (key === baseKey) return; // Skip base series
+
+        const original = inst.originalStrData.get(key);
+        if (!original) return;
+
+        const pt = original.find((p) => p.time === time);
+        if (!pt) return;
+
+        const baseValues = inst.valuesByLineAndTime?.get(baseKey);
+        const targetValues = inst.valuesByLineAndTime?.get(key);
+        if (!baseValues || !targetValues) return;
+
+        const baseValue = baseValues.get(prevTbTime);
+        const targetValue = targetValues.get(prevTbTime);
+        if (baseValue === undefined || targetValue === undefined) return;
+
+        const adjustment = targetValue - baseValue;
+        const result = pt.value - adjustment;
+
+        console.log(
+          `For series ${key} at time ${time}: original = ${pt.value}, base_prev (${prevTbTime}) = ${baseValue}, target_prev (${prevTbTime}) = ${targetValue}, adjustment = ${adjustment}, result = ${result}`
+        );
+      });
+    });
 
     return () => {
       chart.remove();
@@ -769,13 +825,18 @@ const TradeChart: React.FC = () => {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(updateStrSeries);
       inst.strSeries.forEach((series, key) => {
         // Don't restore original data if MOC is active
-        if (!inst.mocActive) {
+        if (!inst.mocActive && !inst.moc2Active) {
           const original = inst.originalStrData.get(key);
           if (original) series.setData(original);
         }
       });
       // Restore RBM original data if not MOC active
-      if (!inst.mocActive && inst.rbmSeries && inst.originalRbmData) {
+      if (
+        !inst.mocActive &&
+        !inst.moc2Active &&
+        inst.rbmSeries &&
+        inst.originalRbmData
+      ) {
         inst.rbmSeries.setData(inst.originalRbmData);
       }
     }
@@ -915,7 +976,8 @@ const TradeChart: React.FC = () => {
     } else if (mirrorOn && chartInstanceRef.current.updateMirror) {
       chartInstanceRef.current.updateMirror();
     } else if (
-      chartInstanceRef.current.mocActive &&
+      (chartInstanceRef.current.mocActive ||
+        chartInstanceRef.current.moc2Active) &&
       chartInstanceRef.current.updateMoc
     ) {
       chartInstanceRef.current.updateMoc();
@@ -994,6 +1056,7 @@ const TradeChart: React.FC = () => {
 
       // Turn off MOC if Mirror is turned on
       if (mocOn) setMocOn(false);
+      if (moc2On) setMoc2On(false);
     } else {
       if (updateMirror)
         chart.timeScale().unsubscribeVisibleTimeRangeChange(updateMirror);
@@ -1063,8 +1126,9 @@ const TradeChart: React.FC = () => {
       // Turn off ALIGN when MOC is enabled
       if (alignOn) setAlignOn(false);
 
-      // Turn off MIRROR if it's on
+      // Turn off MIRROR and MOC2 if it's on
       if (mirrorOn) setMirrorOn(false);
+      if (moc2On) setMoc2On(false);
 
       if (updateMoc) {
         chart.timeScale().subscribeVisibleTimeRangeChange(updateMoc);
@@ -1083,6 +1147,38 @@ const TradeChart: React.FC = () => {
     }
   }, [mocOn]);
 
+  // MOC2 useEffect handler
+  useEffect(() => {
+    const inst = chartInstanceRef.current;
+    if (!inst) return;
+    const { chart, updateMoc } = inst;
+    inst.moc2Active = moc2On;
+
+    if (moc2On) {
+      // Turn off ALIGN when MOC2 is enabled
+      if (alignOn) setAlignOn(false);
+
+      // Turn off MIRROR and MOC if it's on
+      if (mirrorOn) setMirrorOn(false);
+      if (mocOn) setMocOn(false);
+
+      if (updateMoc) {
+        chart.timeScale().subscribeVisibleTimeRangeChange(updateMoc);
+        updateMoc();
+      }
+    } else {
+      // Turn off MOC2
+      if (updateMoc)
+        chart.timeScale().unsubscribeVisibleTimeRangeChange(updateMoc);
+
+      // Restore original data
+      inst.strSeries.forEach((series, key) => {
+        const orig = inst.originalStrData.get(key);
+        if (orig) series.setData(orig);
+      });
+    }
+  }, [moc2On]);
+
   // Normalization useEffect handler
   useEffect(() => {
     const inst = chartInstanceRef.current;
@@ -1100,8 +1196,6 @@ const TradeChart: React.FC = () => {
     }
   }, [normalizeOn]);
 
-
-
   return (
     <div className="w-full h-[600px]">
       <div className="mb-4 flex flex-wrap gap-2">
@@ -1118,8 +1212,9 @@ const TradeChart: React.FC = () => {
             const newAlign = !alignOn;
             setAlignOn(newAlign);
             if (!newAlign && mirrorOn) setMirrorOn(false);
-            // Turn off MOC if ALIGN is turned on
+            // Turn off MOC and MOC2 if ALIGN is turned on
             if (newAlign && mocOn) setMocOn(false);
+            if (newAlign && moc2On) setMoc2On(false);
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
@@ -1157,8 +1252,9 @@ const TradeChart: React.FC = () => {
             setMirrorOn(!mirrorOn);
             if (!mirrorOn) {
               setAlignOn(true);
-              // Turn off MOC if Mirror is turned on
+              // Turn off MOC and MOC2 if Mirror is turned on
               if (mocOn) setMocOn(false);
+              if (moc2On) setMoc2On(false);
             }
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
@@ -1181,15 +1277,43 @@ const TradeChart: React.FC = () => {
               });
               setShowStrs(newShowStrs);
 
-              // Turn off ALIGN and MIRROR
+              // Turn off ALIGN, MIRROR, and MOC2
               if (alignOn) setAlignOn(false);
               if (mirrorOn) setMirrorOn(false);
+              if (moc2On) setMoc2On(false);
             }
             setMocOn(newMoc);
           }}
           className="px-4 py-2 bg-gray-700 text-white rounded"
         >
           MOC: {mocOn ? "On" : "Off"}
+        </button>
+        {/* MOC2 toggle button */}
+        <button
+          onClick={() => {
+            const newMoc2 = !moc2On;
+            if (newMoc2) {
+              // Identify active types and ensure str1 is on for them
+              const activeTypes = Object.keys(showStrs).filter((key) =>
+                showStrs[key].some(Boolean)
+              );
+              const newShowStrs = { ...showStrs };
+              activeTypes.forEach((key) => {
+                newShowStrs[key] = [...newShowStrs[key]];
+                newShowStrs[key][0] = true;
+              });
+              setShowStrs(newShowStrs);
+
+              // Turn off ALIGN, MIRROR, and MOC
+              if (alignOn) setAlignOn(false);
+              if (mirrorOn) setMirrorOn(false);
+              if (mocOn) setMocOn(false);
+            }
+            setMoc2On(newMoc2);
+          }}
+          className="px-4 py-2 bg-gray-700 text-white rounded"
+        >
+          MOC2: {moc2On ? "On" : "Off"}
         </button>
         {/* Holders toggle button */}
         <button
