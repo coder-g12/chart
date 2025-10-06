@@ -18,6 +18,10 @@ const IM_GREEN = "#2ed573";
 const IM_RED = "#c0392b";
 const MM_GREEN = "#2ecc71";
 const MM_RED = "#e74c3c";
+const BORDER_COLOR = "#555555"; // Color for the borders
+
+// Maximum number of candles to show in the viewport
+const MAX_VISIBLE_CANDLES = 120;
 
 const TradeChart: React.FC = () => {
   const [data, setData] = useState<CandleData[]>([]);
@@ -38,9 +42,15 @@ const TradeChart: React.FC = () => {
   const [mirrorOn, setMirrorOn] = useState(false);
   const [mocOn, setMocOn] = useState(false);
   const [moc2On, setMoc2On] = useState(false); // New state for MOC2
-  const [normalizeOn, setNormalizeOn] = useState(false); // Single normalization state for both IM and MM
+  const [normalizeOn, setNormalizeOn] = useState(true); // Always on by default
   const [holdersOn, setHoldersOn] = useState(false); // New state for Holders mode
   const [rbmOn, setRbmOn] = useState(false); // New state for RBM mode
+  const [imZoom, setImZoom] = useState(1); // Zoom factor for IM (0.5 to 2: <1 zoom in, >1 zoom out)
+  const [mmZoom, setMmZoom] = useState(1); // Zoom factor for MM (0.5 to 2: <1 zoom in, >1 zoom out)
+
+  // Border positions for IM and MM (fixed, not changing with zoom)
+  const [imBorderPos, setImBorderPos] = useState({ top: 60, bottom: 20 });
+  const [mmBorderPos, setMmBorderPos] = useState({ top: 80, bottom: 0 });
 
   const priceRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<{
@@ -72,6 +82,8 @@ const TradeChart: React.FC = () => {
     // RBM fields
     rbmSeries?: ISeriesApi<"Line">;
     originalRbmData?: LineData[];
+    // Store the data length for zoom restriction
+    dataLength?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -228,6 +240,23 @@ const TradeChart: React.FC = () => {
     });
   };
 
+  // Function to limit zoom to MAX_VISIBLE_CANDLES
+  const restrictZoomRange = (chart: IChartApi, dataLength: number) => {
+    chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+      if (!logicalRange) return;
+
+      const rangeSize = logicalRange.to - logicalRange.from;
+
+      // If more than MAX_VISIBLE_CANDLES are visible, restrict the range
+      if (rangeSize > MAX_VISIBLE_CANDLES) {
+        chart.timeScale().setVisibleLogicalRange({
+          from: logicalRange.to - MAX_VISIBLE_CANDLES,
+          to: logicalRange.to,
+        });
+      }
+    });
+  };
+
   useEffect(() => {
     if (!priceRef.current || !data.length) return;
 
@@ -248,6 +277,10 @@ const TradeChart: React.FC = () => {
         borderColor: "#555555",
         timeVisible: true,
         secondsVisible: false,
+        // Apply options to limit zoom
+        barSpacing: 6,
+        minBarSpacing: 1,
+        rightOffset: 5,
         tickMarkFormatter: (time: any) => {
           const date = new Date(time * 1000);
           const hours = date.getUTCHours();
@@ -296,6 +329,10 @@ const TradeChart: React.FC = () => {
     const validData = data.filter(
       (d) => d.time && typeof d.time === "string" && d.time.includes(" ")
     );
+
+    // Implement zoom restriction
+    restrictZoomRange(chart, validData.length);
+
     const timeToTopBottom = new Map<Time, string>();
 
     // Collect all T/B timestamps (excluding ET and EB)
@@ -339,33 +376,40 @@ const TradeChart: React.FC = () => {
 
     imSeries.setData(histDataIM);
     mmSeries.setData(histDataMM);
+
+    // Apply scale margin options and update border positions (borders fixed, not updated here)
+    const imScaleMargins = { top: 0.6, bottom: showMM ? 0.2 : 0.05 };
+    const mmScaleMargins = { top: showIM ? 0.8 : 0.6, bottom: 0.0 };
+
     chart.priceScale("im-scale").applyOptions({
-      scaleMargins: { top: 0.6, bottom: 0.05 },
-      borderColor: "#555555",
+      scaleMargins: imScaleMargins,
+      borderColor: BORDER_COLOR,
     });
     chart.priceScale("mm-scale").applyOptions({
-      scaleMargins: { top: 0.6, bottom: 0.05 },
-      borderColor: "#555555",
+      scaleMargins: mmScaleMargins,
+      borderColor: BORDER_COLOR,
     });
+
+    // Border positions are fixed, not updated here
 
     const lastIM = histDataIM[histDataIM.length - 1];
     const lastMM = histDataMM[histDataMM.length - 1];
-    const imPriceLine = imSeries.createPriceLine({
-      price: lastIM.value,
-      color: "white",
-      lineWidth: 1,
-      lineStyle: 0,
-      axisLabelVisible: true,
-      title: "IM",
-    });
-    const mmPriceLine = mmSeries.createPriceLine({
-      price: lastMM.value,
-      color: "white",
-      lineWidth: 1,
-      lineStyle: 0,
-      axisLabelVisible: true,
-      title: "MM",
-    });
+    //   const imPriceLine = imSeries.createPriceLine({
+    //     price: lastIM.value,
+    //     color: "white",
+    //     lineWidth: 1,
+    //     lineStyle: 0,
+    //     axisLabelVisible: true,
+    //     title: "IM",
+    //   });
+    //  const mmPriceLine = mmSeries.createPriceLine({
+    //    price: lastMM.value,
+    //    color: "white",
+    //    lineWidth: 1,
+    //    lineStyle: 0,
+    //    axisLabelVisible: true,
+    //    title: "MM",
+    //  });
 
     const updateStrSeries = () => {
       const inst = chartInstanceRef.current;
@@ -758,23 +802,28 @@ const TradeChart: React.FC = () => {
       timeToTopBottom,
       updateStrSeries,
       updateMirror,
-      updateNormalization, // Add the new normalization function
-      updateTBMarkers, // Add the new TB markers function
+      updateNormalization,
+      updateTBMarkers,
       mirrorActive: false,
-      imPriceLine,
-      mmPriceLine,
-      // MOC related fields
+      //  imPriceLine,
+      //  mmPriceLine,
       tbTimestamps,
       valuesByLineAndTime,
       updateMoc,
       mocActive: false,
-      moc2Active: false, // New for MOC2
-      // Normalization states
-      normalizeActive: false,
-      // RBM fields
+      moc2Active: false,
+      normalizeActive: true, // Always active
       rbmSeries: undefined,
       originalRbmData: undefined,
+      dataLength: validData.length,
     };
+
+    // Set initial visible range to show the most recent 120 candles
+    if (validData.length > MAX_VISIBLE_CANDLES) {
+      const from = validData.length - MAX_VISIBLE_CANDLES;
+      const to = validData.length - 1;
+      chart.timeScale().setVisibleLogicalRange({ from, to });
+    }
 
     // Add click handler for MOC2 logging
     chart.subscribeClick((param) => {
@@ -899,6 +948,9 @@ const TradeChart: React.FC = () => {
     chartInstanceRef.current!.priceSeries = newSeries;
     if (mirrorOn && chartInstanceRef.current.updateMirror)
       chartInstanceRef.current.updateMirror();
+
+    // Re-apply zoom restriction after changing series
+    restrictZoomRange(chart, validData.length);
   }, [priceType, data, showTB, mirrorOn]);
 
   useEffect(() => {
@@ -1005,33 +1057,86 @@ const TradeChart: React.FC = () => {
     }
   }, [rbmOn, data]);
 
+  // Update scale margins and border positions when IM or MM visibility changes
   useEffect(() => {
     if (!chartInstanceRef.current?.chart) return;
     const { chart, imSeries, mmSeries } = chartInstanceRef.current;
+
+    // Update main chart margins
     chart.priceScale("right").applyOptions({
       scaleMargins: {
         top: 0.05,
         bottom: showIM && showMM ? 0.6 : showIM || showMM ? 0.35 : 0.1,
       },
     });
+
+    // Update IM scale margins and border position
     if (imSeries) {
+      let imMargins = {
+        top: 0.6 * imZoom,
+        bottom: showMM ? 0.15 * imZoom : 0, // Updated: 0 when MM is off, so IM scale reaches bottom
+      };
+      // Clamp margins to prevent sum > 0.95
+      const imTotal = imMargins.top + imMargins.bottom;
+      if (imTotal > 0.95) {
+        const scale = 0.95 / imTotal;
+        imMargins.top *= scale;
+        imMargins.bottom *= scale;
+      }
       imSeries.applyOptions({ visible: showIM });
-      if (showIM)
+
+      if (showIM) {
         chart.priceScale("im-scale").applyOptions({
-          scaleMargins: { top: 0.6, bottom: showMM ? 0.2 : 0.05 },
-          borderColor: "#555555",
+          scaleMargins: imMargins,
+          borderColor: BORDER_COLOR,
         });
+
+        // Log border position and zoom value for IM
+        console.log(
+          `IM Border Pos: ${JSON.stringify(imBorderPos)}, IM Zoom: ${imZoom}`
+        );
+      }
     }
+
+    // Update MM scale margins and border position
     if (mmSeries) {
+      let mmMargins = { top: (showIM ? 0.8 : 0.6) * mmZoom, bottom: 0.0 };
+      // Clamp margins to prevent sum > 0.95
+      const mmTotal = mmMargins.top + mmMargins.bottom;
+      if (mmTotal > 0.95) {
+        const scale = 0.95 / mmTotal;
+        mmMargins.top *= scale;
+        mmMargins.bottom *= scale;
+      }
       mmSeries.applyOptions({ visible: showMM });
-      if (showMM)
+
+      if (showMM) {
         chart.priceScale("mm-scale").applyOptions({
-          scaleMargins: { top: showIM ? 0.8 : 0.6, bottom: 0.0 },
-          borderColor: "#555555",
+          scaleMargins: mmMargins,
+          borderColor: BORDER_COLOR,
         });
+
+        // Log border position and zoom value for MM
+        console.log(
+          `MM Border Pos: ${JSON.stringify(mmBorderPos)}, MM Zoom: ${mmZoom}`
+        );
+      }
+    }
+  }, [showIM, showMM, imZoom, mmZoom]);
+  useEffect(() => {
+    if (showIM && !showMM) {
+      setImBorderPos({ top: 80, bottom: 0 });
+      setImZoom(1.4); // Updated to 1.4 for IM alone
+    } else if (showIM && showMM) {
+      setImBorderPos({ top: 60, bottom: 20 });
+      setImZoom(1.1);
+      setMmBorderPos({ top: 80, bottom: 0 });
+      setMmZoom(1.1);
+    } else if (!showIM && showMM) {
+      setMmBorderPos({ top: 80, bottom: 0 });
+      setMmZoom(1.4);
     }
   }, [showIM, showMM]);
-
   useEffect(() => {
     const inst = chartInstanceRef.current;
     if (!inst) return;
@@ -1213,13 +1318,6 @@ const TradeChart: React.FC = () => {
         >
           MM: {showMM ? "On" : "Off"}
         </button>
-        {/* Single Normalization button */}
-        <button
-          onClick={() => setNormalizeOn(!normalizeOn)}
-          className="px-4 py-2 bg-gray-700 text-white rounded"
-        >
-          Norm: {normalizeOn ? "On" : "Off"}
-        </button>
         <button
           onClick={() => {
             setMirrorOn(!mirrorOn);
@@ -1369,7 +1467,64 @@ const TradeChart: React.FC = () => {
         </div>
       ) : (
         <div className="w-full h-full relative">
+          {/* Main chart container */}
           <div ref={priceRef} className="absolute inset-0" />
+
+          {/* IM border overlay */}
+          {showIM && (
+            <>
+              {/* Top border */}
+              <div
+                className="absolute left-0 right-0 bg-gray-500 pointer-events-none"
+                style={{
+                  top: `${imBorderPos.top}%`,
+                  height: "2px",
+                  zIndex: 2,
+                }}
+              />
+              {/* Label for IM */}
+              <div
+                className="absolute px-2 py-1 bg-gray-800 text-white text-xs rounded-sm pointer-events-none"
+                style={{
+                  top: `${imBorderPos.top}%`,
+                  left: "5px",
+                  transform: "translateY(-100%)",
+                  zIndex: 3,
+                }}
+              >
+                IM
+              </div>
+            </>
+          )}
+
+          {/* MM border overlay */}
+          {showMM && (
+            <>
+              {/* Top border */}
+              <div
+                className="absolute left-0 right-0 bg-gray-500 pointer-events-none"
+                style={{
+                  top: `${mmBorderPos.top}%`,
+                  height: "2px",
+                  zIndex: 2,
+                }}
+              />
+              {/* Label for MM */}
+              <div
+                className="absolute px-2 py-1 bg-gray-800 text-white text-xs rounded-sm pointer-events-none"
+                style={{
+                  top: `${mmBorderPos.top}%`,
+                  left: "5px",
+                  transform: "translateY(-100%)",
+                  zIndex: 3,
+                }}
+              >
+                MM
+              </div>
+            </>
+          )}
+
+          {/* MM border overlay */}
         </div>
       )}
     </div>
